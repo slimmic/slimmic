@@ -1,0 +1,236 @@
+GitHub Support Community
+No output on “Process completed with exit code 1”
+Code to Cloud
+GitHub Actions
+
+No output on “Process completed with exit code 1”
+Code to Cloud
+GitHub Actions
+ 
+senui
+
+1
+Jul '20
+Hello,
+
+One of my workflows is failing (see [1]), but I don’t seem to get any valuable output regarding the cause of the failure. Unfortunately, this is not the first time this has happened, and I had to spend hours trying to debug my changes.
+
+I set both ACTIONS_RUNNER_DEBUG and ACTIONS_STEP_DEBUG to true in the hope that I could get some more insight, but nothing useful…
+
+It seems like the runner takes my bash commands and generates a temporary shell script to execute them all. This however seems to sometimes hide the error message when one of the commands fails.
+
+Is there any way to debug this, or at least get more output?
+
+Currently, I get this as the output:
+
+Run . scl_source enable devtoolset-7 || true
+  . scl_source enable devtoolset-7 || true
+  . /etc/profile.d/modules.sh || true
+  module load mpi
+  . $INSTALL_DIR/bin/thisbdm.sh
+  git config --system user.name "Test User"
+  git config --system user.email user@test.com
+  xvfb-run -d -s "-screen 0 2560x1440x24" make run-demos
+  shell: bash --noprofile --norc -e -o pipefail {0}
+  env:
+    INSTALL_DIR: /github/home/biodynamo-v0.1.0
+##[debug]bash --noprofile --norc -e -o pipefail /__w/_temp/5b25a4b0-779d-4218-b1cd-80de8a7a01e8.sh
+##[error]Process completed with exit code 1.
+##[debug]Finishing: System tests BioDynaMo
+[1] https://github.com/BioDynaMo/biodynamo/runs/893818544?check_suite_focus=true 18
+
+Best,
+Ahmad
+
+Hello, @senui I am working on the ticket. I set set -x to find a line that cause the issue: - name: System tests BioDynaMo shell: bash working-directory: build run: | set -x Line: 2020-07-23T11:30:35.2865130Z +++ /usr/bin/scl_enabled llvm-toolset-6.0 2020-07-23T11:…
+
+
+created
+Jul '20
+last reply
+Jul '20
+9
+replies
+
+brightran
+Partner
+Jul '20
+@senui,
+
+I forked your repository and tested. According to my troubleshooting, I found the error returned from the command line “$INSTALL_DIR/bin/thisbdm.sh”.
+The error did not occur on this command line itself. It should be returned by a certain command line in the script ‘thisbdm.sh’.
+
+I recommend that you can try to check if the command lines in the script ‘thisbdm.sh’ contain some defects, and also try executing this script on your local environment to see if it can work fine.
+
+
+
+
+senui
+
+1
+Jul '20
+Hi @brightran,
+
+Thanks for your reply. Could you please tell me how you managed to find out that the error originated from $INSTALL_DIR/bin/thisbdm.sh?
+
+We are running the same type workflow on Ubuntu 18.04, 20.04, and on macOS, but without any failures there…
+
+Yes, I could check the command lines in the thisbdm.sh script one-by-one and I could try executing the script locally to debug this, but as I tried to make clear in my opening post, this could potentially cost me hours and hours of work.
+
+Why is it not possible to see in the Github Actions output which line of thisbdm.sh returned a non-zero exit code? If you run any bash script normally in a terminal, it should output the error message, and not try to hide it.
+
+I hope that there is some more convenient way to debug this vague failure.
+
+Edit:
+I just tried running the exact same commands in the same CentOS docker container that the failing workflow is using, and I cannot reproduce the error :frowning:
+
+
+
+
+brightran
+Partner
+Jul '20
+@senui,
+
+Could you please tell me how you managed to find out that the error originated from $INSTALL_DIR/bin/thisbdm.sh ?
+
+In the “System tests BioDynaMo” step, I printed a label after each command line executed successfully, and found the label for the line “$INSTALL_DIR/bin/thisbdm.sh” did not print. So I could locate the command line where the error was returned from.
+
+For this issue, I have created an issue ticket (actions/virtual-environments#1279 18) to help you report it.
+You can follow this issue ticket and add you comment on it.
+
+1
+
+
+
+senui
+Jul '20
+Thanks for opening the issue ticket. I hope the team understands that the absence of an error message makes this a non-trivial debugging issue. I will keep an eye on the ticket
+
+1
+
+
+
+brightran
+Partner
+Jul '20
+@senui,
+
+OK, please keep following the issue ticket.
+
+
+
+
+al-cheb
+
+2
+Jul '20
+Hello, @senui
+
+I am working on the ticket. I set set -x to find a line that cause the issue:
+
+ - name: System tests BioDynaMo
+       shell: bash
+       working-directory: build
+       run: |
+         set -x
+Line:
+
+2020-07-23T11:30:35.2865130Z +++ /usr/bin/scl_enabled llvm-toolset-6.0
+2020-07-23T11:30:35.3275453Z ##[error]Process completed with exit code 1.
+I found out which part of code is executing this line:
+
+https://github.com/BioDynaMo/biodynamo/blob/5092924f4caf7a90ed815031c2b00b259a7ca571/cmake/env/thisbdm.sh#L374 17
+executing line . scl_source enable llvm-toolset-6.0
+failed line at the scl_source code
+# Now check if the collection isn't already enabled
+/usr/bin/scl_enabled $arg > /dev/null 2> /dev/null      <- failed line
+    if [ $? -ne 0 ]; then
+for     _scls+=($arg)
+    _scl_prefixes+=($_scl_prefix)
+    fi;
+done
+Fix:
+
+run: |
+        . scl_source enable devtoolset-7 || true
+        . scl_source enable llvm-toolset-6.0 || true
+        . /etc/profile.d/modules.sh || true
+        module load mpi
+        . $INSTALL_DIR/bin/thisbdm.sh
+        git config --system user.name "Test User"
+        git config --system user.email user@test.com
+        xvfb-run -d -s "-screen 0 2560x1440x24" make run-demos
+image
+
+Solution
+1
+
+
+
+
+senui
+Jul '20
+Hi @al-cheb,
+
+Many thanks for investigating the issue at hand!
+
+Although I believe that the line that you marked with “failed line” is by design supposed to return a non-zero exit code if $arg is not enabled. In which case, any script that uses non-zero return codes as a means to implement some logic will always fail a Github Action workflow…
+
+Is this something you guys at Github considered? Will things stay like this?
+
+Furthermore, it is strange that this was not reproducible on the same docker container on my own machine. Do you have any idea why this only fails on GH Actions?
+
+
+
+
+al-cheb
+
+4
+Jul '20
+@senui,
+
+Case with source:
+The /usr/bin/scl_enabled llvm-toolset-6.0 encounters a exit 1 which is different from zero. It will terminate the scl_source code instantaneously due to the exit statement and that’s why:
+. $INSTALL_DIR/bin/thisbdm.sh - failed and $INSTALL_DIR/bin/thisbdm.sh - works
+
+Looks like it by design:
+
+return [n]
+
+Causes a function to exit with the return value specified by n. If used outside a function, but during execution of a script by the . (source) command, it causes the shell to stop executing that script and return either n or the exit status of the last command executed within the script as the exit status of the script. If used outside a function and not during execution of a script by ., the return status is false.
+
+source filename [arguments]
+    Read and execute commands from filename in the current shell environment and
+    return **the exit status of the last command executed from filename**. 
+askubuntu.com
+ ysap
+Is there a difference between "." and "source" in bash, after all? 4
+bash, scripts, environment-variables, environment
+asked by ysap on 01:07AM - 30 Aug 12 UTC
+Reproduce behavior:
+
+Without source( ./test.sh):
+
+steps:
+      - name: Test
+        
+        run: |
+          cat <<EOF > $HOME/subscript.sh
+          #!/bin/sh
+          exit 1
+          EOF
+          chmod +x $HOME/subscript.sh
+          
+          cat <<EOF > test.sh
+          #!/bin/bash
+          $HOME/subscript.sh
+          if [ $? -ne 0 ]; then
+              echo PASS
+          fi;
+          EOF
+          
+          chmod +x ./test.sh
+          echo START
+          ./test.sh
+          echo END
